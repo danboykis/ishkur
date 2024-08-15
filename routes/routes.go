@@ -86,13 +86,19 @@ func WriteEndpoint(db db.Db) handler.APIHandler {
 }
 
 func SetupHttpRoutes(conf *config.Config, ver config.Version, dbConn db.Db) *http.ServeMux {
-	wrap := func(ah handler.APIHandler) handler.APIHandler {
-		return middleware.CreateStack(middleware.TimerMiddleware, middleware.AuthInspector)(ah)
+	wrap := func(ah handler.APIHandler) http.HandlerFunc {
+		return middleware.NewMiddlewareHandler(
+			ah,
+			func() []middleware.Middleware {
+				return []middleware.Middleware{&middleware.TimerMiddleware{}, &middleware.AuthMiddleware{}}
+			}).ToHandlerFunc()
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /version", wrap(VersionEndpoint(ver)).ToHttpHandlerFunc())
-	mux.HandleFunc("GET /config", wrap(ConfigEndpoint(*conf)).ToHttpHandlerFunc())
-	mux.HandleFunc("GET /lookup/{key}", wrap(LookupEndpoint(dbConn)).ToHttpHandlerFunc())
-	mux.HandleFunc("POST /lookup/{key}", wrap(WriteEndpoint(dbConn)).ToHttpHandlerFunc())
+
+	mux.HandleFunc("GET /version", wrap(VersionEndpoint(ver)))
+	mux.HandleFunc("GET /config", wrap(ConfigEndpoint(*conf)))
+	mux.HandleFunc("GET /lookup/{key}", wrap(LookupEndpoint(dbConn)))
+	mux.HandleFunc("POST /lookup/{key}", wrap(WriteEndpoint(dbConn)))
+
 	return mux
 }

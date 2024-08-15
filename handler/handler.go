@@ -19,29 +19,35 @@ func (ae *ApiError) Error() string {
 
 type APIHandler func(http.ResponseWriter, *http.Request) error
 
+func (ah APIHandler) HandleError(w http.ResponseWriter, req *http.Request, err error) {
+	if err != nil {
+		var apiErrResponse *ApiError
+		switch {
+		case errors.As(err, &apiErrResponse):
+			w.Header().Add("Content-Type", "application/json")
+			w.WriteHeader(apiErrResponse.Status)
+			jerr := json.NewEncoder(w).Encode(apiErrResponse)
+			if jerr != nil {
+				slog.LogAttrs(req.Context(), slog.LevelError, "could not serialize response", slog.String("error", jerr.Error()))
+				return
+			}
+		default:
+			w.Header().Add("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, werr := fmt.Fprint(w, err.Error())
+			if werr != nil {
+				slog.LogAttrs(req.Context(), slog.LevelError, "could not write error", slog.Any("error", werr))
+				return
+			}
+		}
+	}
+}
+
 func (ah APIHandler) ToHttpHandlerFunc() http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 
 		if err := ah(w, req); err != nil {
-			var apiErrResponse *ApiError
-			switch {
-			case errors.As(err, &apiErrResponse):
-				w.Header().Add("Content-Type", "application/json")
-				w.WriteHeader(apiErrResponse.Status)
-				jerr := json.NewEncoder(w).Encode(apiErrResponse)
-				if jerr != nil {
-					slog.LogAttrs(req.Context(), slog.LevelError, "could not serialize response", slog.String("error", jerr.Error()))
-					return
-				}
-			default:
-				w.Header().Add("Content-Type", "text/plain")
-				w.WriteHeader(http.StatusInternalServerError)
-				_, werr := fmt.Fprint(w, err.Error())
-				if werr != nil {
-					slog.Error("could not write error", "error", werr)
-					return
-				}
-			}
+			ah.HandleError(w, req, err)
 		}
 	}
 }

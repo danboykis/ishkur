@@ -24,6 +24,7 @@ func (fdb *FakeDb) Get(_ context.Context, key string) (string, error) {
 }
 func (fdb *FakeDb) Set(_ context.Context, key string, value string) error {
 	fdb.m[key] = value
+	fmt.Printf("%+v\n", fdb.m)
 	return nil
 }
 func (fdb *FakeDb) Close(_ context.Context) error {
@@ -38,7 +39,7 @@ func TestRun(t *testing.T) {
 	fakedb := &FakeDb{m: make(map[string]string)}
 	s.Db = fakedb
 	go func() {
-		<-time.After(15 * time.Second)
+		<-time.After(25 * time.Second)
 		fmt.Printf("Reseting fakedb: %+v\n", fakedb.m)
 		clear(fakedb.m)
 	}()
