@@ -1,17 +1,19 @@
 .PHONY: build clean run
 
-.DEFAULT: build
+.DEFAULT_GOAL := build
+
+BIN_NAME := ishkur
 
 run: build
-	@echo "running ishkur"
-	./ishkur
+	@echo "running $(BIN_NAME)"
+	./$(BIN_NAME)
 
 build: clean
-	@echo "Building ishkur"
-	@go build -o ishkur
+	@echo "Building $(BIN_NAME)"
+	@go build -o $(BIN_NAME)
 
 clean:
-	@rm -f ishkur
+	@rm -f $(BIN_NAME)
 
 test:
 	go test ./...

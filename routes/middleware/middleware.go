@@ -8,9 +8,15 @@ import (
 	"time"
 )
 
+type ArgGroup struct {
+	w   http.ResponseWriter
+	r   *http.Request
+	err error
+}
+
 type Middleware interface {
-	Enter(w http.ResponseWriter, r *http.Request, err error) (http.ResponseWriter, *http.Request, error)
-	Leave(w http.ResponseWriter, r *http.Request, err error) (http.ResponseWriter, *http.Request, error)
+	Enter(ag *ArgGroup)
+	Leave(ag *ArgGroup)
 }
 
 type Handler struct {
@@ -32,51 +38,42 @@ func (mh *Handler) ToHandlerFunc() http.HandlerFunc {
 	}
 }
 
-type interceptor func(http.ResponseWriter, *http.Request, error) (http.ResponseWriter, *http.Request, error)
-
-func (mh *Handler) exec(f interceptor, w *http.ResponseWriter, req **http.Request, err *error) {
-	nextWriter, nextReq, nextErr := f(*w, *req, *err)
-	*w = nextWriter
-	*req = nextReq
-	*err = nextErr
-}
-
 func (mh *Handler) ExecutePipeline(w http.ResponseWriter, r *http.Request, pipeline []Middleware) {
 
-	var err error = nil
+	ag := &ArgGroup{w: w, r: r, err: nil}
 
 	for i := 0; i < len(pipeline); i++ {
-		mh.exec(pipeline[i].Enter, &w, &r, &err)
+		pipeline[i].Enter(ag)
 	}
 
-	if err != nil {
-		slog.LogAttrs(r.Context(), slog.LevelError, "error in middleware pipeline skipping handler", slog.String("error", err.Error()))
-		mh.Handler.HandleError(w, r, err)
+	if ag.err != nil {
+		slog.LogAttrs(r.Context(), slog.LevelError, "error in middleware pipeline skipping handler", slog.String("error", ag.err.Error()))
+		mh.Handler.HandleError(ag.w, ag.r, ag.err)
 	} else {
-		err = mh.Handler(w, r)
-		mh.Handler.HandleError(w, r, err)
+		ag.err = mh.Handler(ag.w, ag.r)
+		mh.Handler.HandleError(ag.w, ag.r, ag.err)
 	}
 
 	for i := len(pipeline) - 1; i >= 0; i-- {
-		mh.exec(pipeline[i].Leave, &w, &r, &err)
+		pipeline[i].Leave(ag)
 	}
 }
 
 type AuthMiddleware struct{}
 
-func (amw *AuthMiddleware) Enter(w http.ResponseWriter, req *http.Request, err error) (http.ResponseWriter, *http.Request, error) {
-	if err != nil {
-		return w, req, err
+func (amw *AuthMiddleware) Enter(ag *ArgGroup) {
+	if ag.err != nil {
+		return
 	}
-	if v, exists := req.Header["Authorization"]; exists {
-		slog.Info("auth header", "auth", v[0])
-		return w, req, nil
+	if v, exists := ag.r.Header["Authorization"]; exists {
+		slog.LogAttrs(ag.r.Context(), slog.LevelInfo, "auth header", slog.String("auth", v[0]))
+		return
 	}
-	return w, req, &handler.ApiError{Status: 401, Message: "No Authorization header"}
+	ag.err = &handler.ApiError{Status: 401, Message: "No Authorization header"}
 }
 
-func (amw *AuthMiddleware) Leave(w http.ResponseWriter, r *http.Request, err error) (http.ResponseWriter, *http.Request, error) {
-	return w, r, err
+func (amw *AuthMiddleware) Leave(_ *ArgGroup) {
+	return
 }
 
 type TimerMiddleware struct {
@@ -94,22 +91,21 @@ func (wrw *wrapperResponseWriter) WriteHeader(statusCode int) {
 	wrw.ResponseWriter.WriteHeader(statusCode)
 }
 
-func (tmw *TimerMiddleware) Enter(w http.ResponseWriter, req *http.Request, err error) (http.ResponseWriter, *http.Request, error) {
+func (tmw *TimerMiddleware) Enter(mg *ArgGroup) {
 	now := time.Now()
-	tmw.w = &wrapperResponseWriter{ResponseWriter: w}
+	wrw := &wrapperResponseWriter{ResponseWriter: mg.w}
+	mg.w = wrw
+	tmw.w = wrw
 	tmw.startTime = now
-	return tmw.w, req, err
+	return
 }
 
-func (tmw *TimerMiddleware) Leave(w http.ResponseWriter, req *http.Request, err error) (http.ResponseWriter, *http.Request, error) {
-	logger := slog.Default().
-		With("method", req.Method).
-		With("path", req.URL.Path).
-		With("query", req.URL.RawQuery)
-
-	logger.LogAttrs(req.Context(), slog.LevelInfo, "timer",
-		slog.Int("status", tmw.w.statusCode),
-		slog.Duration("took", time.Since(tmw.startTime)))
-
-	return w, req, err
+func (tmw *TimerMiddleware) Leave(ag *ArgGroup) {
+	slog.Default().
+		With("method", ag.r.Method).
+		With("path", ag.r.URL.Path).
+		With("query", ag.r.URL.RawQuery).
+		LogAttrs(ag.r.Context(), slog.LevelInfo, "timer",
+			slog.Int("status", tmw.w.statusCode),
+			slog.Duration("took", time.Since(tmw.startTime)))
 }
